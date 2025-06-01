@@ -1,4 +1,4 @@
-# CI: buduję obraz multi-arch, skanuję CVE, a potem publikuję
+# CI: buduje obraz multi-arch, skanuje CVE, a potem publikuje
 # Autor: Nazar Malizderskyi
 
 name: build-and-release
@@ -47,7 +47,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    # 4. buduję i tymczasowo pushuję tag
+    # 4. buduje i tymczasowo pushuje tag
     - name: Build & push temp tag
       uses: docker/build-push-action@v4
       with:
