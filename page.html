@@ -1,0 +1,18 @@
+<html>
+<select id=coun>
+  <option value=PL>Poland</option>
+  <option value=UK>United&nbsp;Kingdom</option>
+  <option value=FR>France</option>
+  <option value=DE>Germany</option>
+</select>
+<select id=city></select>
+<button id=go>Show</button><pre id=o></pre>
+<script>
+m={PL:["Warsaw","Krakow"],UK:["London"],FR:["Paris"],DE:["Berlin"]};
+f=d=>document.getElementById(d);
+a=f("coun");b=f("city");g=f("go");o=f("o");
+(a.onchange=()=>{b.innerHTML=m[a.value].map(x=>`<option>${x}</option>`).join``})();
+g.onclick=()=>fetch("https://wttr.in/"+b.value+"?format=3")
+ .then(r=>r.text()).then(t=>o.textContent=t);
+</script>
+</html>
