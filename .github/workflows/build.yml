@@ -1,4 +1,4 @@
-# File: .github/workflows/build.yml
+# .github/workflows/build.yml
 
 name: CI – Build & Push Multi-arch Image
 
@@ -74,7 +74,7 @@ jobs:
           docker pull ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
 
       - name: Scan image for CVEs (Trivy)
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@v1
         with:
           image-ref: ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
           scan-type: image
