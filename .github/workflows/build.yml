@@ -10,7 +10,7 @@ on:
 env:
   # Must be lowercase for GHCR
   IMAGE_NAME: ghcr.io/godefreyy/weather-app
-  CACHE_IMAGE: godfrey/weather-app-buildcache
+  CACHE_IMAGE: godefrey/weather-app-buildcache
 
 permissions:
   contents: read
