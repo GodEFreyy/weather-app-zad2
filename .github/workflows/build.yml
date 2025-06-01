@@ -1,5 +1,4 @@
-# .github/workflows/build.yml
-name: CI – Build, Scan & Push multi-arch image
+name: CI – Build & Push Multi-arch Image
 
 on:
   push:
@@ -7,8 +6,8 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner,, }}/weather-app     # lower-case
-  CACHE_IMAGE: godefrey/weather-app-buildcache                         # Docker-Hub repo you created
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/weather-app
+  CACHE_IMAGE: godefrey/weather-app-buildcache   # your DockerHub username
 
 permissions:
   contents: read
@@ -16,71 +15,76 @@ permissions:
   id-token: write
 
 jobs:
-  build-scan-and-push:
+  build-and-push:
     runs-on: ubuntu-latest
 
     steps:
-    # 1 ▸ checkout code
-    - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # 2 ▸ QEMU & Buildx so we can cross-compile later
-    - uses: docker/setup-qemu-action@v3
-    - uses: docker/setup-buildx-action@v3
-      id: buildx
+      - name: Set up QEMU (for cross-building)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
 
-    # 3 ▸ log in to Docker Hub (for cache) and GHCR (for final push)
-    - uses: docker/login-action@v2
-      with:
-        registry: docker.io
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Set up Docker BuildX
+        uses: docker/setup-buildx-action@v3
+        id: buildx
 
-    - uses: docker/login-action@v2
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-    # ────────────────────────────────────────────────────────────────
-    # 4 ▸ QUICK local build (only runner architecture) -> load
-    #     gives us something Trivy can scan without hitting GHCR.
-    # ────────────────────────────────────────────────────────────────
-    - name: Build runner-arch image and LOAD it (for scan)
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        platforms: linux/amd64            # runner arch; ok on GitHub-hosted runner
-        load: true                        # loads into local Docker, no registry push
-        tags: |
-          ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
+      - name: Log in to GHCR (GitHub Container Registry)
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    # 5 ▸ Trivy CVE scan on the just-built local image
-    - name: Trivy scan (block on HIGH/CRITICAL)
-      uses: aquasecurity/trivy-action@0.22.0
-      with:
-        image-ref: ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
-        scan-type: image
-        format: table
-        vuln-type: os,library
-        severity: CRITICAL,HIGH
-        ignore-unfixed: true
+      # Build and PUSH the temp tag so Trivy can pull it
+      - name: Build & Push (temporary tag for scanning)
+        id: build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true      # push temporary tag!
+          tags: |
+            ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
+          cache-from: |
+            type=registry,ref=${{ env.CACHE_IMAGE }}:cache
+          cache-to: |
+            type=registry,ref=${{ env.CACHE_IMAGE }}:cache,mode=max
+          builder: ${{ steps.buildx.outputs.name }}
 
-    # ────────────────────────────────────────────────────────────────
-    # 6 ▸ ONLY IF the scan passed: build full multi-arch + push
-    #     and update BuildKit cache stored in Docker Hub.
-    # ────────────────────────────────────────────────────────────────
-    - name: Build & push multi-arch image (after scan passes)
-      if: success()                      # run only when previous steps succeeded
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: |
-          ${{ env.IMAGE_NAME }}:latest
-          ${{ env.IMAGE_NAME }}:${{ github.sha }}
-        cache-from: |
-          type=registry,ref=${{ env.CACHE_IMAGE }}:cache
-        cache-to: |
-          type=registry,ref=${{ env.CACHE_IMAGE }}:cache,mode=max
-        builder: ${{ steps.buildx.outputs.name }}
+      # Trivy will pull the pushed cibuild tag and scan it
+      - name: Scan image for CVEs (Trivy)
+        uses: aquasecurity/trivy-action@0.22.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
+          scan-type: image
+          format: 'table'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      # Only if Trivy passes, push real tags
+      - name: Push final image to GHCR
+        if: success()
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: |
+            type=registry,ref=${{ env.CACHE_IMAGE }}:cache
+          cache-to: |
+            type=registry,ref=${{ env.CACHE_IMAGE }}:cache,mode=max
+          builder: ${{ steps.buildx.outputs.name }}
