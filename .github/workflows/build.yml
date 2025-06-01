@@ -1,81 +1,62 @@
 # .github/workflows/build.yml
-#
-# CI – build, scan, cache and publish a multi-arch image (amd64 + arm64)
-# Docker-Hub cache repo  :  godefrey/weather-app-buildcache
-# GHCR target repo       :  ghcr.io/<owner>/weather-app-zad2
-# Secrets required       :  DOCKERHUB_USERNAME = godefrey
-#                          DOCKERHUB_PASSWORD = <Docker-Hub password / PAT>
-
-name: CI – Build & Push Multi-arch Image
+name: CI – Build, Scan & Push multi-arch image
 
 on:
   push:
-    branches: [ main ]        # run on every push to main
-  workflow_dispatch:          # …and when triggered manually
+    branches: [ main ]
+  workflow_dispatch:
 
-# ---------- global env ----------
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/weather-app-zad2
-  CACHE_IMAGE: godefrey/weather-app-buildcache
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner,, }}/weather-app     # lower-case
+  CACHE_IMAGE: godefrey/weather-app-buildcache                         # Docker-Hub repo you created
 
-permissions:                  # allow the job to push to GHCR
+permissions:
   contents: read
   packages: write
   id-token: write
 
 jobs:
-  build-scan-push:
+  build-scan-and-push:
     runs-on: ubuntu-latest
 
     steps:
-    # 1️⃣  check out sources
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
+    # 1 ▸ checkout code
+    - uses: actions/checkout@v4
 
-    # 2️⃣  set up QEMU for cross-architecture builds
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-      with:
-        platforms: linux/amd64,linux/arm64
-
-    # 3️⃣  set up a Buildx builder
-    - name: Set up Buildx
+    # 2 ▸ QEMU & Buildx so we can cross-compile later
+    - uses: docker/setup-qemu-action@v3
+    - uses: docker/setup-buildx-action@v3
       id: buildx
-      uses: docker/setup-buildx-action@v3
 
-    # 4️⃣  log in to Docker Hub  (for cache layers)
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v2
+    # 3 ▸ log in to Docker Hub (for cache) and GHCR (for final push)
+    - uses: docker/login-action@v2
       with:
         registry: docker.io
-        username: ${{ secrets.DOCKERHUB_USERNAME }}   # = godefrey
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-    # 5️⃣  log in to the GitHub Container Registry (target registry)
-    - name: Log in to GHCR
-      uses: docker/login-action@v2
+    - uses: docker/login-action@v2
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    # 6️⃣  build & PUSH a “cibuild-<sha>” test image (needed so Trivy can pull it)
-    - name: Build and push test image
+    # ────────────────────────────────────────────────────────────────
+    # 4 ▸ QUICK local build (only runner architecture) -> load
+    #     gives us something Trivy can scan without hitting GHCR.
+    # ────────────────────────────────────────────────────────────────
+    - name: Build runner-arch image and LOAD it (for scan)
       uses: docker/build-push-action@v4
       with:
         context: .
-        platforms: linux/amd64,linux/arm64
-        push: true                               # push to GHCR right away
-        tags: ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
-        cache-from: type=registry,ref=${{ env.CACHE_IMAGE }}:cache
-        cache-to:   type=registry,ref=${{ env.CACHE_IMAGE }}:cache,mode=max
+        platforms: linux/amd64            # runner arch; ok on GitHub-hosted runner
+        load: true                        # loads into local Docker, no registry push
+        tags: |
+          ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
 
-    # 7️⃣  CVE scan – fail the job if any HIGH/CRITICAL vuln is found
-    - name: Scan image with Trivy
-      uses: aquasecurity/trivy-action@0.22.0      # note: NO “v” in the tag
+    # 5 ▸ Trivy CVE scan on the just-built local image
+    - name: Trivy scan (block on HIGH/CRITICAL)
+      uses: aquasecurity/trivy-action@0.22.0
       with:
         image-ref: ${{ env.IMAGE_NAME }}:cibuild-${{ github.sha }}
         scan-type: image
@@ -84,9 +65,12 @@ jobs:
         severity: CRITICAL,HIGH
         ignore-unfixed: true
 
-    # 8️⃣  promote to :latest and :<sha> only if the scan step succeeded
-    - name: Build & push release tags
-      if: success()      # runs only when all previous steps (incl. scan) succeeded
+    # ────────────────────────────────────────────────────────────────
+    # 6 ▸ ONLY IF the scan passed: build full multi-arch + push
+    #     and update BuildKit cache stored in Docker Hub.
+    # ────────────────────────────────────────────────────────────────
+    - name: Build & push multi-arch image (after scan passes)
+      if: success()                      # run only when previous steps succeeded
       uses: docker/build-push-action@v4
       with:
         context: .
@@ -95,5 +79,8 @@ jobs:
         tags: |
           ${{ env.IMAGE_NAME }}:latest
           ${{ env.IMAGE_NAME }}:${{ github.sha }}
-        cache-from: type=registry,ref=${{ env.CACHE_IMAGE }}:cache
-        cache-to:   type=registry,ref=${{ env.CACHE_IMAGE }}:cache,mode=max
+        cache-from: |
+          type=registry,ref=${{ env.CACHE_IMAGE }}:cache
+        cache-to: |
+          type=registry,ref=${{ env.CACHE_IMAGE }}:cache,mode=max
+        builder: ${{ steps.buildx.outputs.name }}
